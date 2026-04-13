@@ -23,6 +23,10 @@ public class Task {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // Görev için özel kod (Örn: DEV-01, SOFT-02)
+    @Column(name = "task_code")
+    private String taskCode;
+
     @Column(nullable = false)
     private String title;
 

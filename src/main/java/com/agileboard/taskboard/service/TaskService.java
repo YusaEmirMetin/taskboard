@@ -6,6 +6,8 @@ import java.util.List;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
 import com.agileboard.taskboard.dto.TaskDTO;
@@ -53,11 +55,12 @@ public class TaskService {
     public TaskDTO createTask(TaskDTO taskDTO) {
         Task task = TaskMapper.toEntity(taskDTO);
 
-        // Kullanıcı eşleşmesi yap
-        if (taskDTO.getUserId() != null) {
-            User user = userRepository.findById(taskDTO.getUserId())
-                    .orElseThrow(
-                            () -> new ResourceNotFoundException("Kullanıcı bulunamadı, ID: " + taskDTO.getUserId()));
+        // Sisteme giriş yapmış kullanıcıyı Context'ten al
+        Object principal = SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        if (principal instanceof UserDetails) {
+            String username = ((UserDetails) principal).getUsername();
+            User user = userRepository.findByUsername(username)
+                    .orElseThrow(() -> new ResourceNotFoundException("Kullanıcı bulunamadı: " + username));
             task.setUser(user);
         }
 

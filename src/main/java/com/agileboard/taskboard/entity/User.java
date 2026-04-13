@@ -33,6 +33,14 @@ public class User {
     @Column(nullable = false, unique = true)
     private String email;
 
+    // YENİ EKLENENLER: Güvenlik Alanları 🛡️
+    @Column(nullable = false)
+    private String password;
+
+    // Kullanıcı rolü (Örn: ROLE_USER, ROLE_ADMIN)
+    @Column(nullable = false)
+    private String role;
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<Task> tasks;
 }

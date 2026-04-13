@@ -10,10 +10,12 @@ public class TaskMapper {
         if (task == null) return null;
         return TaskDTO.builder()
                 .id(task.getId())
+                .taskCode(task.getTaskCode())
                 .title(task.getTitle())
                 .description(task.getDescription())
                 .status(task.getStatus())
                 .userId(task.getUser() != null ? task.getUser().getId() : null)
+                .ownerUsername(task.getUser() != null ? task.getUser().getUsername() : "Bilinmiyor")
                 .build();
     }
 
@@ -22,6 +24,7 @@ public class TaskMapper {
         if (dto == null) return null;
         return Task.builder()
                 .id(dto.getId())
+                .taskCode(dto.getTaskCode())
                 .title(dto.getTitle())
                 .description(dto.getDescription())
                 .status(dto.getStatus())

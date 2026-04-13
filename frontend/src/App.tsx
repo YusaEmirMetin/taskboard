@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import { Client } from '@stomp/stompjs'
+import Auth from './Auth'
 
 interface Task {
   id: number;
   title: string;
+  taskCode?: string;
   description: string;
   status: string;
   userId?: number;
+  ownerUsername?: string;
 }
 
 const STATUS_MAP = {
@@ -17,7 +20,12 @@ const STATUS_MAP = {
 };
 
 function App() {
+  // --- AUTH STATE'LERİ ---
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [currentUser, setCurrentUser] = useState<string | null>(localStorage.getItem('username'));
+
   const [tasks, setTasks] = useState<Task[]>([])
+  const [taskCode, setTaskCode] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [connected, setConnected] = useState(false)
@@ -29,45 +37,78 @@ function App() {
   
   const stompClient = useRef<Client | null>(null)
 
+  // Token değiştiğinde (örneğin localStorage temizlenip çıkış yapıldığında)
+  // Veya giriş başarılı olduğunda fetchTask çalışsın
+  useEffect(() => {
+    if (token) {
+      fetchTasks();
+      
+      // WebSocket'i çalıştır
+      const client = new Client({
+        brokerURL: 'ws://localhost:8080/ws/websocket',
+        reconnectDelay: 5000,
+        onConnect: () => {
+          setConnected(true);
+          client.subscribe('/topic/tasks', (message) => {
+            const newTask: Task = JSON.parse(message.body);
+            setTasks(prevTasks => {
+              if (newTask.status === 'DELETED') {
+                return prevTasks.filter(t => t.id !== newTask.id);
+              }
+              const filteredTasks = prevTasks.filter(t => t.id !== newTask.id);
+              return [...filteredTasks, newTask];
+            });
+          });
+        },
+        onDisconnect: () => setConnected(false),
+      });
+      client.activate();
+      stompClient.current = client;
+      
+      return () => { client.deactivate() };
+    }
+  }, [token]);
+
+  const getHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
+  });
+
   const fetchTasks = () => {
-    fetch('http://localhost:8080/api/tasks')
-      .then(res => res.json())
+    fetch('http://localhost:8080/api/tasks', { headers: getHeaders() })
+      .then(res => {
+        if(res.status === 403) handleLogout();
+        return res.json();
+      })
       .then(data => setTasks(data))
       .catch(err => console.error("Backend'e ulaşılamadı:", err));
   }
 
-  useEffect(() => {
-    fetchTasks();
-    const client = new Client({
-      brokerURL: 'ws://localhost:8080/ws/websocket',
-      reconnectDelay: 5000,
-      onConnect: () => {
-        setConnected(true);
-        client.subscribe('/topic/tasks', (message) => {
-          const newTask: Task = JSON.parse(message.body);
-          setTasks(prevTasks => {
-            // Eğer status "DELETED" ise listeden tamamen çıkar
-            if (newTask.status === 'DELETED') {
-              return prevTasks.filter(t => t.id !== newTask.id);
-            }
-            // Değilse (Yeni veya Güncelleme), varsa güncelle yoksa ekle
-            const filteredTasks = prevTasks.filter(t => t.id !== newTask.id);
-            return [...filteredTasks, newTask];
-          });
-        });
-      },
-      onDisconnect: () => setConnected(false),
-    });
-    client.activate();
-    stompClient.current = client;
-    return () => { client.deactivate() };
-  }, []);
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    setToken(null);
+    setCurrentUser(null);
+  }
+
+  const handleLogin = (jwtToken: string, username: string) => {
+    localStorage.setItem('token', jwtToken);
+    localStorage.setItem('username', username);
+    setToken(jwtToken);
+    setCurrentUser(username);
+  }
+
+  // EĞER GİRİŞ YAPILMAMIŞSA SADECE AUTH EKRANINI GÖSTER
+  if (!token) {
+    return <Auth onLogin={handleLogin} />;
+  }
 
   const deleteTask = (id: number) => {
     if (!window.confirm("Bu görevi silmek istediğine emin misin?")) return;
     
     fetch(`http://localhost:8080/api/tasks/${id}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: getHeaders()
     })
       .then(() => console.log("Görev silindi:", id))
       .catch(err => console.error("Silme hatası:", err));
@@ -77,29 +118,28 @@ function App() {
     e.preventDefault();
     fetch('http://localhost:8080/api/tasks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description, status: STATUS_MAP.TODO })
+      headers: getHeaders(),
+      body: JSON.stringify({ taskCode, title, description, status: STATUS_MAP.TODO })
     })
       .then(res => res.json())
-      .then(() => { setTitle(''); setDescription(''); })
+      .then(() => { setTaskCode(''); setTitle(''); setDescription(''); })
       .catch(err => console.error("Görev eklenemedi:", err));
   }
 
   const updateTaskStatus = (task: Task, newStatus: string) => {
     fetch(`http://localhost:8080/api/tasks/${task.id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(),
       body: JSON.stringify({ ...task, status: newStatus })
     })
       .then(res => res.json())
       .catch(err => console.error("Güncelleme hatası:", err));
   }
 
-  // --- DÜZENLEME KAYDETME FONKSİYONU ---
   const handleSaveEdit = (task: Task) => {
     fetch(`http://localhost:8080/api/tasks/${task.id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(),
       body: JSON.stringify({ ...task, title: editTitle, description: editDescription })
     })
       .then(res => res.json())
@@ -117,8 +157,17 @@ function App() {
 
   const renderColumn = (title: string, status: string) => {
     const columnTasks = tasks.filter(t => t.status === status);
+    
+    // Status'e göre CSS sınıfı belirle
+    const getStatusClass = () => {
+      if (status === STATUS_MAP.TODO) return 'todo';
+      if (status === STATUS_MAP.IN_PROGRESS) return 'in-progress';
+      if (status === STATUS_MAP.DONE) return 'done';
+      return '';
+    };
+
     return (
-      <div className="column">
+      <div className={`column ${getStatusClass()}`}>
         <div className="column-header">
           <h3>{title}</h3>
           <span className="task-count">{columnTasks.length}</span>
@@ -159,7 +208,7 @@ function App() {
                     </div>
                     <p className="description">{task.description || 'Açıklama yok'}</p>
                     <div className="task-footer">
-                      <span className="user-id">#{task.id}</span>
+                      <span className="user-id">{task.taskCode || `TSK-${task.id}`} - 👤 {task.ownerUsername || 'Bilinmiyor'}</span>
                       <div className="task-actions">
                         {task.status === STATUS_MAP.TODO && (
                           <button onClick={() => updateTaskStatus(task, STATUS_MAP.IN_PROGRESS)} className="action-btn start">
@@ -192,14 +241,28 @@ function App() {
     <div className="app-container">
       <header className="header">
         <h1>TaskBoard</h1>
-        <div className={`status-badge ${connected ? 'online' : ''}`}>
-          {connected ? '● Canlı Bağlantı' : '○ Bağlantı Kuruluyor...'}
+        <div className="header-right">
+          <div className={`status-badge ${connected ? 'online' : ''}`}>
+            {connected ? '● Canlı Bağlantı' : '○ Bağlantı Kuruluyor...'}
+          </div>
+          <div className="user-menu">
+            <span className="current-user">👤 {currentUser}</span>
+            <button onClick={handleLogout} className="logout-btn">Çıkış Yap</button>
+          </div>
         </div>
       </header>
+
 
       <section className="form-card">
         <h3>✦ Hızlı Görev Ekle</h3>
         <form onSubmit={handleSubmit} className="form-row">
+          <input
+            className="form-input"
+            style={{flex: '0.5'}}
+            placeholder="Kod (DEV-01)"
+            value={taskCode}
+            onChange={e => setTaskCode(e.target.value)}
+          />
           <input
             className="form-input"
             placeholder="Ne yapılması gerekiyor?"
